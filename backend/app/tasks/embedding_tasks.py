@@ -65,7 +65,7 @@ async def _generate_embeddings_for_repo(repo_id: str, db: AsyncSession):
         texts.append(text[:8000])  # Gemini embedding limit
 
     # Generate embeddings in batches
-    embeddings = await batch_generate_embeddings(texts, batch_size=50)
+    embeddings = await batch_generate_embeddings(texts, batch_size=25)
 
     # Update chunks with embeddings
     for chunk, embedding in zip(chunks, embeddings):
