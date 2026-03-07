@@ -39,11 +39,10 @@ async def generate_embedding(text: str) -> list[float]:
 
 async def batch_generate_embeddings(
     texts: list[str],
-    batch_size: int = 50,
+    batch_size: int = 25,
 ) -> list[list[float]]:
     """
     Generate embeddings in batches with rate-limit handling.
-    Processes `batch_size` texts at a time.
     """
     model = get_embeddings_model()
     all_embeddings: list[list[float]] = []
@@ -60,15 +59,25 @@ async def batch_generate_embeddings(
                 logger.info("Embedded batch %d-%d / %d", i, i + len(batch), len(texts))
                 break
             except Exception as e:
+                error_msg = str(e)
                 retries += 1
-                wait = 2 ** retries
-                logger.warning("Embedding batch failed (attempt %d/%d): %s — retrying in %ds", retries, max_retries, e, wait)
+                
+                if "429" in error_msg or "quota" in error_msg.lower():
+                    import re
+                    retry_match = re.search(r'retry in (\d+\.?\d*)s', error_msg)
+                    wait = float(retry_match.group(1)) if retry_match else 60
+                    logger.warning("Rate limit hit (attempt %d/%d). Waiting %ds before retry...", retries, max_retries, wait)
+                else:
+                    wait = 2 ** retries
+                    logger.warning("Embedding batch failed (attempt %d/%d): %s — retrying in %ds", retries, max_retries, e, wait)
+                
                 await asyncio.sleep(wait)
                 if retries == max_retries:
                     raise
 
-        # Small delay between batches to respect rate limits
         if i + batch_size < len(texts):
-            await asyncio.sleep(0.5)
+            delay = 18  
+            logger.info("Waiting %ds before next batch to respect rate limits...", delay)
+            await asyncio.sleep(delay)
 
     return all_embeddings
