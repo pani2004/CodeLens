@@ -1,4 +1,4 @@
-# CodeLens AI 🔍
+# CodeLens AI 
 
 > AI-powered codebase analysis and understanding tool
 
@@ -190,58 +190,6 @@ The frontend will be available at `http://localhost:3000`
 - Click any file to view with syntax highlighting
 - Click "Explain" to ask AI about the file
 
-## 🔧 Development
-
-### Backend Development
-
-```bash
-cd backend
-
-# Run migrations
-docker compose exec backend alembic revision --autogenerate -m "description"
-docker compose exec backend alembic upgrade head
-
-# View logs
-docker compose logs -f backend
-docker compose logs -f celery-worker
-
-# Restart services after code changes
-docker compose restart backend celery-worker
-
-# Run tests (if available)
-docker compose exec backend pytest
-```
-
-### Frontend Development
-
-```bash
-cd client
-
-# Development server with hot reload
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm run start
-
-# Lint code
-npm run lint
-```
-
-### Database Management
-
-```bash
-# Access PostgreSQL
-docker compose exec db psql -U postgres -d codelens
-
-# Backup database
-docker compose exec db pg_dump -U postgres codelens > backup.sql
-
-# Restore database
-cat backup.sql | docker compose exec -T db psql -U postgres codelens
-```
 
 ## 🌐 API Endpoints
 
