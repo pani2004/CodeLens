@@ -58,12 +58,12 @@ export default function ChatPage() {
         ])
         setRepository(repo)
         setFileTree(repo.metadata?.file_tree || [])
-        
+
         // Only update if backend has newer history or store is empty
         if (history.length > 0 && messages.length === 0) {
           setMessages(repoId, history)
         }
-        
+
         setSuggestedPrompts(prompts)
       } catch (err) {
         console.error('Failed to fetch data:', err)
@@ -85,36 +85,46 @@ export default function ChatPage() {
     }
 
     addMessage(repoId, userMessage)
+
+    addMessage(repoId, {
+      id: 'streaming',
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+    })
+
     setIsSending(true)
 
     try {
       let assistantContent = ''
-      
+
       // Stream the response
       for await (const chunk of sendChatMessage(repoId, content, selectedFile?.path)) {
-        assistantContent += chunk  
+        assistantContent += chunk
         updateLastMessage(repoId, assistantContent)
       }
+
       const finalMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'assistant',
         content: assistantContent,
         timestamp: new Date().toISOString(),
       }
-      
-      // Replace streaming message with final message
+
       const currentMessages = getMessages(repoId)
       const withoutStreaming = currentMessages.filter((m) => m.id !== 'streaming')
       setMessages(repoId, [...withoutStreaming, finalMessage])
-      
+
     } catch (err) {
       console.error('Failed to send message:', err)
-      addMessage(repoId, {
+      const currentMessages = getMessages(repoId)
+      const withoutStreaming = currentMessages.filter((m) => m.id !== 'streaming')
+      setMessages(repoId, [...withoutStreaming, {
         id: Date.now().toString(),
         role: 'assistant',
         content: 'Sorry, I encountered an error processing your request. Please try again.',
         timestamp: new Date().toISOString(),
-      })
+      }])
     } finally {
       setIsSending(false)
     }
@@ -191,12 +201,12 @@ export default function ChatPage() {
                 Graph View
               </Button>
             </Link>
-            <Link href={`/flows/${repoId}`}>
+            {/* <Link href={`/flows/${repoId}`}>
               <Button variant="ghost" size="sm" className="gap-2">
                 <Workflow className="h-4 w-4" />
                 Flow View
               </Button>
-            </Link>
+            </Link> */}
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="ghost" size="icon">
@@ -207,7 +217,7 @@ export default function ChatPage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete Repository?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This will permanently delete the analysis for "{repository.name}". 
+                    This will permanently delete the analysis for "{repository.name}".
                     This action cannot be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>

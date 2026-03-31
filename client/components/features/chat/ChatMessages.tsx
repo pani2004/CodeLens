@@ -20,6 +20,7 @@ interface MessageItemProps {
 
 function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
+  const isStreaming = !isUser && message.id === 'streaming'
 
   return (
     <div className={cn('flex gap-3 group', isUser && 'flex-row-reverse')}>
@@ -54,21 +55,32 @@ function MessageItem({ message }: MessageItemProps) {
         >
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
+          ) : isStreaming && !message.content ? (
+        
+            <div className="bg-muted rounded-lg p-4">
+              <div className="flex gap-1">
+                <div className="w-2 h-2 bg-foreground/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-2 h-2 bg-foreground/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-2 h-2 bg-foreground/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
           ) : (
             <div className="prose prose-invert max-w-none prose-pre:p-0 prose-pre:m-0 prose-pre:bg-transparent">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  code({ node, inline, className, children, ...props }: any) {
+                 
+                  code({ node, className, children, ...props }: any) {
                     const match = /language-(\w+)/.exec(className || '')
                     const language = match ? match[1] : ''
                     const value = String(children).replace(/\n$/, '')
-                    
+                    const isInline = !match && !String(children).includes('\n')
+
                     return (
                       <CodeBlock
                         language={language}
                         value={value}
-                        inline={inline}
+                        inline={isInline}
                         className={className}
                       />
                     )
@@ -87,10 +99,10 @@ function MessageItem({ message }: MessageItemProps) {
                     </blockquote>
                   ),
                   a: ({ children, href }) => (
-                    <a 
-                      href={href} 
-                      className="text-primary hover:text-primary/80 underline underline-offset-2 transition-colors" 
-                      target="_blank" 
+                    <a
+                      href={href}
+                      className="text-primary hover:text-primary/80 underline underline-offset-2 transition-colors"
+                      target="_blank"
                       rel="noopener noreferrer"
                     >
                       {children}
@@ -133,6 +145,8 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
 
+  const hasStreamingMessage = messages.some((m) => m.id === 'streaming')
+
   return (
     <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
       {messages.length === 0 && !isLoading ? (
@@ -153,7 +167,8 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
           {messages.map((message) => (
             <MessageItem key={message.id} message={message} />
           ))}
-          {isLoading && (
+         
+          {isLoading && !hasStreamingMessage && (
             <div className="flex gap-3">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
                 <Bot className="h-4 w-4" />
