@@ -20,8 +20,7 @@ async def build_dependency_graph(repo_id: str, db: AsyncSession) -> dict:
     Returns data matching frontend DependencyGraph interface.
     """
     logger.info(f"Building dependency graph for repo {repo_id}")
-    
-    # Fetch all chunks for the repo
+
     result = await db.execute(
         select(CodeChunk).where(CodeChunk.repo_id == repo_id)
     )
@@ -33,47 +32,54 @@ async def build_dependency_graph(repo_id: str, db: AsyncSession) -> dict:
 
     logger.info(f"Processing {len(chunks)} code chunks")
 
-    # Build directed graph
     G = nx.DiGraph()
     file_languages: dict[str, str] = {}
     file_sizes: dict[str, int] = {}
 
-    # Add nodes (unique file paths)
+    # Add nodes
     for chunk in chunks:
         fp = chunk.file_path
         if fp not in file_languages:
             file_languages[fp] = chunk.language or "text"
             file_sizes[fp] = 0
         file_sizes[fp] += len(chunk.content)
-
         if not G.has_node(fp):
             G.add_node(fp)
 
+    known_files = set(file_languages.keys())
     logger.info(f"Graph has {G.number_of_nodes()} nodes")
 
-    # Add edges (imports)
+    # Add edges
+    edges_added = 0
+    edges_attempted = 0
+
     for chunk in chunks:
         meta = chunk.metadata_jsonb or {}
-        imports = meta.get("imports", [])
-        for imp in imports:
-            resolved = _resolve_import(imp, chunk.file_path, set(file_languages.keys()))
-            if resolved and resolved != chunk.file_path:
-                G.add_edge(chunk.file_path, resolved, type="import")
 
+        imports = meta.get("imports", [])
+        if not imports:
+            imports = _extract_imports_from_content(chunk.content, chunk.language or "")
+
+        for imp in imports:
+            edges_attempted += 1
+            resolved = _resolve_import(imp, chunk.file_path, known_files)
+            if resolved and resolved != chunk.file_path:
+                if not G.has_edge(chunk.file_path, resolved):
+                    G.add_edge(chunk.file_path, resolved, type="import")
+                    edges_added += 1
+
+    logger.info(f"Edges attempted: {edges_attempted}, added: {edges_added}")
     logger.info(f"Graph has {G.number_of_edges()} edges")
 
-    # Calculate metrics (simplified for large graphs)
     entry_points = [n for n in G.nodes() if G.in_degree(n) == 0]
     circular = []
-    
-    # Only calculate cycles if graph is not too large
+
     if G.number_of_nodes() < 500 and G.number_of_edges() > 0:
         try:
-            circular = list(nx.simple_cycles(G))[:20]  # Limit to first 20
+            circular = list(nx.simple_cycles(G))[:20]
         except Exception as e:
             logger.warning(f"Could not calculate cycles: {e}")
 
-    # Simplified centrality calculation for large graphs
     if G.number_of_nodes() < 200:
         try:
             betweenness = nx.betweenness_centrality(G)
@@ -81,13 +87,10 @@ async def build_dependency_graph(repo_id: str, db: AsyncSession) -> dict:
             logger.warning(f"Could not calculate betweenness: {e}")
             betweenness = {n: 0 for n in G.nodes()}
     else:
-        # For large graphs, use simpler degree centrality
-        logger.info("Using degree centrality for large graph")
         betweenness = {n: G.degree(n) / max(G.number_of_nodes() - 1, 1) for n in G.nodes()}
 
-    # Build response
     nodes = []
-    for i, fp in enumerate(G.nodes()):
+    for fp in G.nodes():
         node_type = _classify_node(fp)
         nodes.append({
             "id": fp,
@@ -121,49 +124,172 @@ async def build_dependency_graph(repo_id: str, db: AsyncSession) -> dict:
     }
 
 
+def _extract_imports_from_content(content: str, language: str) -> list[str]:
+    """
+     Fallback: parse imports directly from file content.
+    Handles JS/TS/Python/Angular patterns.
+    """
+    imports = []
+    if not content:
+        return imports
+
+    # JS/TS: import ... from '...' or require('...')
+    if language in ("javascript", "typescript", "js", "ts", "jsx", "tsx", ""):
+        # import X from 'path'
+        # import { X } from 'path'
+        # import 'path'
+        for match in re.finditer(
+            r"""import\s+(?:[\w*{}\s,]+\s+from\s+)?['"]([^'"]+)['"]""",
+            content
+        ):
+            imports.append(match.group(1))
+
+        # require('path')
+        for match in re.finditer(r"""require\s*\(\s*['"]([^'"]+)['"]\s*\)""", content):
+            imports.append(match.group(1))
+
+    # Python: import X / from X import Y
+    if language in ("python", "py"):
+        for match in re.finditer(r"""^from\s+([\w.]+)\s+import""", content, re.MULTILINE):
+            imports.append(match.group(1))
+        for match in re.finditer(r"""^import\s+([\w.]+)""", content, re.MULTILINE):
+            imports.append(match.group(1))
+
+    return imports
+
+
 def _resolve_import(import_path: str, source_file: str, known_files: set[str]) -> Optional[str]:
-    """Attempt to resolve an import to a known file path."""
-    # Normalize module path
-    normalized = import_path.replace(".", "/")
+    """
+   
+    """
+    # Skip node_modules and external packages
+    if _is_external_package(import_path):
+        return None
 
-    # Try common patterns
-    candidates = [
-        f"{normalized}.py",
-        f"{normalized}/index.js",
-        f"{normalized}/index.ts",
-        f"{normalized}.js",
-        f"{normalized}.ts",
-        f"{normalized}.tsx",
-        f"{normalized}.jsx",
-        normalized,
-    ]
-
-    # Relative imports: resolve from source file's directory
     source_dir = "/".join(source_file.split("/")[:-1])
+
+    # properly handle relative imports including ../
     if import_path.startswith("."):
-        rel = import_path.lstrip("./").replace(".", "/")
+        resolved_dir = _resolve_relative_dir(source_dir, import_path)
+        # Strip the trailing filename part
+        base = import_path.split("/")[-1]
+        # Remove leading dots
+        base = re.sub(r'^\.+/', '', import_path)
+        base = base.split("/")[-1]
+
         candidates = [
-            f"{source_dir}/{rel}.py",
-            f"{source_dir}/{rel}.js",
-            f"{source_dir}/{rel}.jsx",
-            f"{source_dir}/{rel}.ts",
-            f"{source_dir}/{rel}.tsx",
-            f"{source_dir}/{rel}/index.js",
-            f"{source_dir}/{rel}/index.jsx",
-            f"{source_dir}/{rel}/index.ts",
-            f"{source_dir}/{rel}/index.tsx",
+            f"{resolved_dir}/{base}.ts",
+            f"{resolved_dir}/{base}.tsx",
+            f"{resolved_dir}/{base}.js",
+            f"{resolved_dir}/{base}.jsx",
+            f"{resolved_dir}/{base}.py",
+            f"{resolved_dir}/{base}/index.ts",
+            f"{resolved_dir}/{base}/index.tsx",
+            f"{resolved_dir}/{base}/index.js",
+            f"{resolved_dir}/{base}/index.jsx",
+            f"{resolved_dir}/{base}",
+        ]
+    else:
+        # absolute imports — try matching against known file suffixes
+        # e.g. '@app/services/auth' → look for any known file ending in 'services/auth.ts' etc.
+        normalized = import_path.lstrip("@").replace("@", "/")
+        # Remove common aliases like 'app/', 'src/'
+        path_variants = [
+            normalized,
+            "/".join(normalized.split("/")[1:]),  # strip first segment (alias)
         ]
 
+        candidates = []
+        for variant in path_variants:
+            if not variant:
+                continue
+            candidates += [
+                f"{variant}.ts",
+                f"{variant}.tsx",
+                f"{variant}.js",
+                f"{variant}.jsx",
+                f"{variant}.py",
+                f"{variant}/index.ts",
+                f"{variant}/index.js",
+                f"src/{variant}.ts",
+                f"src/{variant}.tsx",
+                f"src/{variant}.js",
+                f"src/{variant}/index.ts",
+                f"client/{variant}.ts",
+                f"client/{variant}.tsx",
+                f"client/{variant}.js",
+                f"client/{variant}/index.ts",
+            ]
+
+        # fuzzy suffix match against known files
+        for known in known_files:
+            for variant in path_variants:
+                if variant and known.endswith(variant + ".ts") or known.endswith(variant + ".js"):
+                    candidates.append(known)
+
     for candidate in candidates:
+        # Normalize double slashes
+        candidate = re.sub(r'/+', '/', candidate)
         if candidate in known_files:
             return candidate
 
     return None
 
 
+def _resolve_relative_dir(source_dir: str, import_path: str) -> str:
+    """
+
+    e.g. source_dir='src/app/components', import='../services/auth'
+    → 'src/app/services'
+    """
+    parts = source_dir.split("/") if source_dir else []
+
+    # Count how many levels up we need to go
+    segments = import_path.split("/")
+    for seg in segments[:-1]:  # all but the last (filename) part
+        if seg == "..":
+            if parts:
+                parts.pop()
+        elif seg == ".":
+            pass  # stay in same dir
+        else:
+            parts.append(seg)
+
+    return "/".join(parts)
+
+
+def _is_external_package(import_path: str) -> bool:
+    """
+    Filter out node_modules and Python stdlib/third-party imports.
+    """
+    # Relative imports are always local
+    if import_path.startswith("."):
+        return False
+
+    # Angular/common scoped packages
+    external_scopes = (
+        "@angular/", "@ngrx/", "@ngx-", "rxjs", "rxjs/",
+        "zone.js", "tslib", "lodash", "axios", "express",
+        "react", "react-dom", "next", "vue",
+        "os", "sys", "re", "json", "math", "io",
+        "collections", "typing", "pathlib", "datetime",
+        "flask", "django", "fastapi", "sqlalchemy",
+    )
+    for scope in external_scopes:
+        if import_path.startswith(scope) or import_path == scope.rstrip("/"):
+            return True
+
+    # Pure package names (no slashes, no dots) are likely external
+    if "/" not in import_path and "." not in import_path:
+        return True
+
+    return False
+
+
 def _classify_node(file_path: str) -> str:
     """Classify a file node as file, module, or package."""
-    if file_path.endswith("__init__.py") or file_path.endswith("index.js") or file_path.endswith("index.ts"):
+    name = file_path.split("/")[-1]
+    if name in ("__init__.py", "index.js", "index.ts", "index.jsx", "index.tsx"):
         return "package"
     if "/" in file_path:
         return "module"

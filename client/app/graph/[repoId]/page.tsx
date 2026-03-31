@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, memo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Download, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import { ArrowLeft, Download } from 'lucide-react'
 import Link from 'next/link'
 import ReactFlow, {
   Background,
@@ -11,6 +11,8 @@ import ReactFlow, {
   useEdgesState,
   Node,
   Edge,
+  Handle,
+  Position,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { Button } from '@/components/ui/button'
@@ -20,11 +22,23 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { ErrorState } from '@/components/shared/ErrorState'
 import { getRepository } from '@/lib/api/repos'
 import { getDependencyGraph } from '@/lib/api/analysis'
-import type { Repository, DependencyGraph } from '@/lib/types'
+import type { Repository } from '@/lib/types'
+
+
+const FileNode = memo(({ data }: { data: { label: string; type: string } }) => (
+  <div className="text-xs text-white">
+    <Handle type="target" position={Position.Top} />
+    <div className="font-semibold truncate max-w-[130px]">{data.label}</div>
+    <div className="opacity-70">{data.type}</div>
+    <Handle type="source" position={Position.Bottom} />
+  </div>
+))
+FileNode.displayName = 'FileNode'
+
+const nodeTypes = { fileNode: FileNode }
 
 export default function GraphPage() {
   const params = useParams()
-  const router = useRouter()
   const repoId = params.repoId as string
 
   const [repository, setRepository] = useState<Repository | null>(null)
@@ -32,6 +46,7 @@ export default function GraphPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [edgeCount, setEdgeCount] = useState(0)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -48,30 +63,24 @@ export default function GraphPage() {
         console.log('Edges count:', graph?.edges?.length)
 
         if (graph && graph.nodes) {
-          // Calculate grid layout for nodes
           const gridCols = Math.ceil(Math.sqrt(graph.nodes.length))
           const spacing = 200
-          
+
           const graphNodes: Node[] = graph.nodes.map((node, index) => {
             const row = Math.floor(index / gridCols)
             const col = index % gridCols
-            
+
             return {
               id: node.id,
-              type: 'default',
+              type: 'fileNode', 
               data: {
-                label: (
-                  <div className="text-xs">
-                    <div className="font-semibold">{node.label}</div>
-                    <div className="text-muted-foreground">{node.type}</div>
-                  </div>
-                ),
+                label: node.label,
+                type: node.type,
               },
               position: { x: col * spacing, y: row * spacing },
               style: {
                 background: node.type === 'file' ? '#3B82F6' : '#8B5CF6',
-                color: 'white',
-                border: '1px solid #1E40AF',
+                border: '1px solid rgba(255,255,255,0.2)',
                 borderRadius: '8px',
                 padding: '10px',
                 width: 150,
@@ -79,7 +88,7 @@ export default function GraphPage() {
             }
           })
 
-          const graphEdges: Edge[] = graph.edges.map((edge, index) => ({
+          const graphEdges: Edge[] = (graph.edges || []).map((edge, index) => ({
             id: `${edge.source}-${edge.target}-${index}`,
             source: edge.source,
             target: edge.target,
@@ -89,11 +98,10 @@ export default function GraphPage() {
 
           setNodes(graphNodes)
           setEdges(graphEdges)
-          
+          setEdgeCount(graphEdges.length)
+
           console.log('Set nodes:', graphNodes.length)
           console.log('Set edges:', graphEdges.length)
-          console.log('First node:', graphNodes[0])
-          console.log('First edge:', graphEdges[0])
         }
       } catch (err) {
         console.error('Failed to fetch data:', err)
@@ -106,12 +114,10 @@ export default function GraphPage() {
     fetchData()
   }, [repoId, setNodes, setEdges])
 
-  console.log('Rendering with nodes:', nodes.length, 'edges:', edges.length)
-
-  const handleDownload = () => {
-    // TODO: Implement graph export functionality
+  const handleDownload = useCallback(() => {
     console.log('Download graph')
-  }
+    // TODO: Implement export
+  }, [])
 
   if (isLoading) {
     return (
@@ -134,9 +140,9 @@ export default function GraphPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col" style={{ height: '100vh' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <header className="border-b border-border/40 backdrop-blur-sm z-50 bg-background/80">
+      <header className="border-b border-border/40 backdrop-blur-sm z-50 bg-background/80 flex-shrink-0">
         <div className="container flex h-14 items-center justify-between px-4 mx-auto">
           <div className="flex items-center gap-4">
             <Link href={`/chat/${repoId}`}>
@@ -151,8 +157,12 @@ export default function GraphPage() {
               <p className="text-xs text-muted-foreground">Dependency Graph</p>
             </div>
           </div>
-
           <div className="flex items-center gap-2">
+            {edgeCount < 10 && nodes.length > 20 && (
+              <span className="text-xs text-yellow-500 mr-2">
+                ⚠️ Only {edgeCount} edges detected — backend may be missing dependencies
+              </span>
+            )}
             <Button variant="ghost" size="sm" onClick={handleDownload} className="gap-2">
               <Download className="h-4 w-4" />
               Export
@@ -161,13 +171,14 @@ export default function GraphPage() {
         </div>
       </header>
 
-      {/* Graph Visualization */}
-      <div className="relative" style={{ width: '100%', height: 'calc(100vh - 3.5rem)' }}>
+      {/* Graph */}
+      <div style={{ flex: 1, position: 'relative' }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes} 
           fitView
           style={{ width: '100%', height: '100%' }}
           className="bg-background"

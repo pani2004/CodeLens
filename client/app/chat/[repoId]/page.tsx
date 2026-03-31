@@ -201,12 +201,7 @@ export default function ChatPage() {
                 Graph View
               </Button>
             </Link>
-            {/* <Link href={`/flows/${repoId}`}>
-              <Button variant="ghost" size="sm" className="gap-2">
-                <Workflow className="h-4 w-4" />
-                Flow View
-              </Button>
-            </Link> */}
+            
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="ghost" size="icon">
